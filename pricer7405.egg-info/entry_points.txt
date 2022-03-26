@@ -1,0 +1,3 @@
+[console_scripts]
+pricer = pricer.bin:cli
+
