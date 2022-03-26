@@ -1,8 +1,0 @@
-pyproject.toml
-setup.py
-pricer/__init__.py
-pricer/main.py
-pricer.egg-info/PKG-INFO
-pricer.egg-info/SOURCES.txt
-pricer.egg-info/dependency_links.txt
-pricer.egg-info/top_level.txt
