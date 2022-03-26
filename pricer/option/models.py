@@ -62,14 +62,16 @@ class European(Model):
         return self.v_price(p or self.p, S or self.S, K or self.K,
                             T or self.T, sigma or self.sigma, r or self.r, q or self.q)
 
-    def delta_sigma(self):
-        return self.v_delta_sigma(self.S, self.K, self.T, self.sigma, self.r, self.q)
+    def delta_sigma(self, S=None, K=None, T=None, sigma=None, r=None, q=None):
+        return self.v_delta_sigma(
+            S or self.S, K or self.K, T or self.T, sigma or self.sigma,
+            r or self.r, q or self.q)
     
     def imply_sigma(self, px, guess=0.2):
         return root.newton(
             guess, px,
             lambda sigma: self.price(sigma=sigma),
-            lambda sigma: self.delta_sigma())
+            lambda sigma: self.delta_sigma(sigma=sigma))
 
 class Asian(Model):
 
