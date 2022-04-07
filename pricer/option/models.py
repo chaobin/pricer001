@@ -1,17 +1,20 @@
 from typing import Sequence
+from itertools import permutations
 
 import numpy as np
 import pandas as pd
 import scipy as si
-from scipy.stats import norm
+from scipy.stats import norm, gmean
 
 from ..optimizer import root
 
 
 __all__ = ['European']
 
+class Model(object):
 
-class Model(object): pass
+    def brownian(self, r, T, sigma, z):
+        return np.exp((r-0.5*sigma**2)*T+sigma*np.sqrt(T)*z)
 
 class BlackScholes(Model):
 
@@ -100,24 +103,38 @@ class AsianGeometric(BlackScholes):
         n = n or self.n
         sigma = sigma or self.sigma
         r = r or self.r
-        T = T or self.T
         
         sigma_m = sigma * np.sqrt(( (n + 1) * (2*n + 1) )/ (6*n**2))
         r_m = (r - sigma**2 / 2) * ((n + 1) / (2 * n)) + sigma_m**2 / 2
+        T = T or self.T
         
+        df = np.exp(-r * T)
         return self.v_price(
             self.p, S or self.S, K or self.K,
             T or self.T, sigma_m, r_m)
 
-class AsianArithemetic(BlackScholes):
+class MonteCarlo(Model):
 
-    def __init__(self, p:str, n, S, K, T, sigma, r):
-        '''
-        n
-            number of observations in the mean basket
-        p
-            str, "call" or "put"
-        '''
+    def reduce_variance(self, X, Y):
+        XY = X * Y
+        covXY = np.mean(XY) - (np.mean(X) * np.mean(Y))
+        theta = covXY / np.var(Y)
+
+        target = X + theta*(self.control_variate() - Y)
+        return target
+        
+    def confidence(self, result):
+        M = len(result)
+        mean = np.mean(result)
+        std = np.std(result)
+        
+        upper = mean + 1.96 * std/np.sqrt(M)
+        lower = mean - 1.96 * std/np.sqrt(M)
+        return mean, lower, upper
+
+class Asian(MonteCarlo):
+
+    def __init__(self, p:str, n, S, K, T, sigma, r, type_="arithmetic"):
         self.p = p
         self.n = n
         self.S = S
@@ -125,10 +142,65 @@ class AsianArithemetic(BlackScholes):
         self.T = T
         self.sigma = sigma
         self.r = r
+        self.type_ = type_
 
-class BasketGeometric(BlackScholes):
+    # override
+    def control_variate(self):
+        geo = AsianGeometric(self.p, self.n, self.S, self.K, self.K, self.sigma, self.r)
+        return geo.price()
+    
+    def interval(self):
+        return self.T / self.n
 
-    def __init__(self, p:str, S:Sequence, K, T, sigma:Sequence, r):
+    def df(self):
+        return np.exp(-self.r * self.T)
+    
+    def generate_path(self, simulations:int):
+        '''
+        In a Asian option with geometric average, the observed price
+        is defined as:
+            S_t1 = S_t * e**brownian
+        '''
+        z = np.random.randn(simulations, self.n)
+        S_T = self.S * np.cumprod(
+            self.brownian(self.r, self.T, self.sigma, z),
+            1)
+        return S_T, z
+
+    def payoff(self, S_T):
+        if self.p == 'C':
+            option_payoff = self.df() * np.maximum(S_T - self.K, 0)
+        else:
+            option_payoff = self.df() * np.maximum(self.K - S_T, 0)
+        return option_payoff
+    
+    def price(self, simulations:int=1000, control_variate=None):
+        if control_variate:
+            return self.price_with_control_variate(simulations)
+            
+        S_T, z = self.generate_path(simulations)
+        if self.type_ == 'arithmetic':
+            avg = np.mean(S_T, 1)
+        elif self.type_ == 'geometric':
+            avg = gmean(S_T, axis=1)
+        payoff = self.payoff(avg)
+        return self.confidence(payoff)
+    
+    def price_with_control_variate(self, simulations:int=1000):
+        S_T, z = self.generate_path(simulations)
+
+        avg_geo = gmean(S_T, axis=1)
+        avg_ari = np.mean(S_T, axis=1)
+        
+        payoff_geo = self.payoff(avg_geo)
+        payoff_ari = self.payoff(avg_ari)
+
+        payoff = self.reduce_variance(payoff_ari, payoff_geo)
+        return self.confidence(payoff)
+        
+class GeometricBasketWithTwoAssets(BlackScholes):
+
+    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r):
         '''
         S
             vector of prices of a basket of assets
@@ -138,22 +210,114 @@ class BasketGeometric(BlackScholes):
             str, "call" or "put"
         '''
         self.p = p
-        self.n = n
-        self.S = S
+        self.S1 = S1
+        self.S2 = S2
         self.K = K
         self.T = T
-        self.sigma = sigma
+        self.sigma1 = sigma1
+        self.sigma2 = sigma2
+        self.corr = corr
         self.r = r
 
-    def price(self, S:Sequence=None, K=None, T=None, sigma=None, r=None):
-        n = n or self.n
-        sigma = sigma or self.sigma
+    def price(self, S1=None, S2=None, K=None, T=None, sigma1=None, sigma2=None, corr=None, r=None):
+        sigma1 = sigma1 or self.sigma1
+        sigma2 = sigma2 or self.sigma2
+        
+        S1 = S1 or self.S1
+        S2 = S2 or self.S2
+        sigma1 = sigma1 or self.sigma1
+        sigma2 = sigma2 or self.sigma2
         r = r or self.r
         T = T or self.T
+        corr = corr or self.corr
+
+        # basket 
+        B = np.sqrt(S1*S2)
+        sigma = np.sqrt(sigma1 ** 2 + sigma1 * sigma2 * corr * 2 + sigma2 ** 2) / 2
+        mu = r - (sigma1**2 + sigma2**2)/4 + 0.5*sigma**2
+        df = np.exp(-r * T)
         
-        sigma_m =  np.sqrt() / n
-        r_m = (r - sigma**2 / 2) * ((n + 1) / (2 * n)) + sigma_m**2 / 2
+        return df * self.v_price(
+            self.p, B, K or self.K,
+            T or self.T, sigma, mu)
+
+class ArithmeticBasketWithTwoAssets(MonteCarlo):
+
+    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r, type_="arithmetic"):
+        self.p = p
+        self.S1 = S1
+        self.S2 = S2
+        self.K = K
+        self.T = T
+        self.sigma1 = sigma1
+        self.sigma2 = sigma2
+        self.corr = corr
+        self.r = r
+        self.type_ = type_
+
+    def control_variate(self):
+        geo = GeometricBasketWithTwoAssets(
+            self.p, self.S1, self.S2, self.K, self.T,
+            self.sigma1, self.sigma2, self.corr, self.r)
+        return geo.price()
+    
+    def generate_path(self, simulations, seed=100):
+        np.random.seed(seed)
+        z1 = np.random.randn(simulations)
+        z  = np.random.randn(simulations)
+        z2 = self.corr*z1 + np.sqrt(1-self.corr**2)*z
+
+        S1_T = self.S1 * self.brownian(self.r, self.T, self.sigma1, z1)
+        S2_T = self.S2 * self.brownian(self.r, self.T, self.sigma2, z2)
         
-        return self.v_price(
-            self.p, S or self.S, K or self.K,
-            T or self.T, sigma_m, r_m)
+        return S1_T, S2_T
+
+    def df(self):
+        return np.exp(-self.r * self.T)
+    
+    def price_with_control_variate(self):
+
+        XY = [0.0]*path
+        for i in range(0, path):
+            XY[i] = arith_payoff[i]*geo_payoff[i]
+        covXY = np.mean(XY) - np.mean(arith_payoff)*np.mean(geo_payoff)
+        theta = covXY/np.var(geo_payoff)
+
+        geo = geo_basket(S1, S2, sigma1, sigma2, r, T, K ,corr, type)
+        Z = arith_payoff + theta * (geo - geo_payoff)
+        z_mean = np.mean(Z)
+        z_std = np.std(Z)
+        return z_mean
+
+    def payoff(self, S_T):
+        if self.p == 'C':
+            option_payoff = self.df() * np.maximum(S_T - self.K, 0)
+        else:
+            option_payoff = self.df() * np.maximum(self.K - S_T, 0)
+        return option_payoff
+    
+    def price(self, simulations:int=1000, control_variate=None):
+        if control_variate:
+            return self.price_with_control_variate(simulations)
+            
+        S1_T, S2_T = self.generate_path(simulations)
+        
+        if self.type_ == 'arithmetic':
+            B_T = (S1_T + S2_T) / 2
+        elif self.type_ == 'geometric':
+            B_T = np.exp((np.log(S1_T) + np.log(S1_T)) / 2)
+
+        payoff = self.payoff(B_T)
+        return self.confidence(payoff)
+    
+    def price_with_control_variate(self, simulations:int=1000):
+        S1_T, S2_T = self.generate_path(simulations)
+        
+        B_T_mean = (S1_T + S2_T) / 2
+        B_T_geo  = np.exp((np.log(S1_T) + np.log(S1_T)) / 2)
+        
+        payoff_geo = self.payoff(B_T_geo)
+        payoff_mean = self.payoff(B_T_mean)
+
+        payoff = self.reduce_variance(payoff_mean, payoff_geo)
+        return self.confidence(payoff)
