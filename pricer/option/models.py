@@ -1,3 +1,4 @@
+import math
 from typing import Sequence
 from itertools import permutations
 
@@ -9,10 +10,20 @@ from scipy.stats import norm, gmean
 from ..optimizer import root
 
 
-__all__ = ['European']
+__all__ = [
+    'European',
+    'Asian',
+    'BinomialTree',
+    'AsianGeometric',
+    'GeometricBasketWithTwoAssets',
+    'ArithmeticBasketWithTwoAssets']
+
 
 class Model(object):
 
+    def df(self):
+        return np.exp(-self.r * self.T)
+    
     def brownian(self, r, T, sigma, z):
         return np.exp((r-0.5*sigma**2)*T+sigma*np.sqrt(T)*z)
 
@@ -134,7 +145,7 @@ class MonteCarlo(Model):
 
 class Asian(MonteCarlo):
 
-    def __init__(self, p:str, n, S, K, T, sigma, r, type_="arithmetic"):
+    def __init__(self, p:str, n, S, K, T, sigma, r, M:int=1000, type_="arithmetic"):
         self.p = p
         self.n = n
         self.S = S
@@ -142,6 +153,7 @@ class Asian(MonteCarlo):
         self.T = T
         self.sigma = sigma
         self.r = r
+        self.M = M
         self.type_ = type_
 
     # override
@@ -151,9 +163,6 @@ class Asian(MonteCarlo):
     
     def interval(self):
         return self.T / self.n
-
-    def df(self):
-        return np.exp(-self.r * self.T)
     
     def generate_path(self, simulations:int):
         '''
@@ -174,7 +183,8 @@ class Asian(MonteCarlo):
             option_payoff = self.df() * np.maximum(self.K - S_T, 0)
         return option_payoff
     
-    def price(self, simulations:int=1000, control_variate=None):
+    def price(self, simulations:int=None, control_variate=None):
+        simulations = simulations or self.M
         if control_variate:
             return self.price_with_control_variate(simulations)
             
@@ -186,7 +196,8 @@ class Asian(MonteCarlo):
         payoff = self.payoff(avg)
         return self.confidence(payoff)
     
-    def price_with_control_variate(self, simulations:int=1000):
+    def price_with_control_variate(self, simulations:int=None):
+        simulations = simulations or self.M
         S_T, z = self.generate_path(simulations)
 
         avg_geo = gmean(S_T, axis=1)
@@ -243,7 +254,7 @@ class GeometricBasketWithTwoAssets(BlackScholes):
 
 class ArithmeticBasketWithTwoAssets(MonteCarlo):
 
-    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r, type_="arithmetic"):
+    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r, M:int=1000, type_="arithmetic"):
         self.p = p
         self.S1 = S1
         self.S2 = S2
@@ -253,6 +264,7 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
         self.sigma2 = sigma2
         self.corr = corr
         self.r = r
+        self.M = M
         self.type_ = type_
 
     def control_variate(self):
@@ -271,9 +283,6 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
         S2_T = self.S2 * self.brownian(self.r, self.T, self.sigma2, z2)
         
         return S1_T, S2_T
-
-    def df(self):
-        return np.exp(-self.r * self.T)
     
     def price_with_control_variate(self):
 
@@ -297,6 +306,7 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
         return option_payoff
     
     def price(self, simulations:int=1000, control_variate=None):
+        simulations = simulations or self.M
         if control_variate:
             return self.price_with_control_variate(simulations)
             
@@ -321,3 +331,41 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
 
         payoff = self.reduce_variance(payoff_mean, payoff_geo)
         return self.confidence(payoff)
+
+class BinomialTree(Model):
+
+    def __init__(self, p:str, S, K, T, sigma, r, N=10):
+        '''
+        p
+            str, "call" or "put"
+        '''
+        self.p = p # buy or sell
+        self.S = S
+        self.K = K
+        self.T = T
+        self.sigma = sigma
+        self.r = r
+        self.N = N
+
+    def payoff(self, S_T):
+        if self.p == 'C':
+            return max(S_T - self.K,0)
+        else:
+            return max(self.K - S_T, 0)
+
+    def combos(self, n, i):
+        return math.factorial(n) / (math.factorial(n-i)*math.factorial(i))
+    
+    def price(self, N=None):
+        N = N or self.N
+        dt = self.T / N
+        u = np.exp(self.sigma * np.sqrt(dt))
+        d = np.exp(-self.sigma * np.sqrt(dt))
+        P = (  np.exp(self.r*dt) - d )  /  (  u - d )
+        v = 0
+        for i in range(N+1):
+            p = self.combos(N, i)*P**i*(1-P)**(N-i)
+            S_T = self.S*(u)**i*(d)**(N-i)
+            v += self.payoff(S_T) * p
+        
+        return self.df() * v
