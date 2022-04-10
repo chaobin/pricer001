@@ -27,11 +27,11 @@ def test_price_asian_geometric():
     for test in tests:
         option = models.Asian(*test)
         px, l, u = option.price(simulations=M)
-        test.extend([0, l, u, px])
+        test.extend([round(x, 3) for x in [0, l, u, px]])
     for test in tests_control_variate:
         option = models.Asian(*test)
         px, l, u = option.price(simulations=M, control_variate=True)
-        test.extend([1, l, u, px])
+        test.extend([round(x, 3) for x in [1, l, u, px]])
 
     tests.extend(tests_control_variate)
 
@@ -65,11 +65,11 @@ def test_price_basket_mean_option():
     for test in tests:
         option = models.ArithmeticBasketWithTwoAssets(*test)
         px, l, u = option.price(simulations=M)
-        test.extend([0, l, u, px])
+        test.extend([round(x, 3) for x in [0, l, u, px]])
     for test in tests_control_variate:
         option = models.ArithmeticBasketWithTwoAssets(*test)
         px, l, u = option.price(simulations=M, control_variate=True)
-        test.extend([1, l, u, px])
+        test.extend([round(x, 3) for x in [1, l, u, px]])
 
     tests.extend(tests_control_variate)
 

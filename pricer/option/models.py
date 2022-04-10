@@ -119,7 +119,6 @@ class AsianGeometric(BlackScholes):
         r_m = (r - sigma**2 / 2) * ((n + 1) / (2 * n)) + sigma_m**2 / 2
         T = T or self.T
         
-        df = np.exp(-r * T)
         return self.v_price(
             self.p, S or self.S, K or self.K,
             T or self.T, sigma_m, r_m)
@@ -145,7 +144,7 @@ class MonteCarlo(Model):
 
 class Asian(MonteCarlo):
 
-    def __init__(self, p:str, n, S, K, T, sigma, r, M:int=1000, type_="arithmetic"):
+    def __init__(self, p:str, n, S, K, T, sigma, r, M:int=10000, type_="arithmetic"):
         self.p = p
         self.n = n
         self.S = S
@@ -158,7 +157,7 @@ class Asian(MonteCarlo):
 
     # override
     def control_variate(self):
-        geo = AsianGeometric(self.p, self.n, self.S, self.K, self.K, self.sigma, self.r)
+        geo = AsianGeometric(self.p, self.n, self.S, self.K, self.T, self.sigma, self.r)
         return geo.price()
     
     def interval(self):
@@ -170,10 +169,11 @@ class Asian(MonteCarlo):
         is defined as:
             S_t1 = S_t * e**brownian
         '''
-        z = np.random.randn(simulations, self.n)
+        z = np.random.standard_normal((simulations, self.n))
         S_T = self.S * np.cumprod(
-            self.brownian(self.r, self.T, self.sigma, z),
+            self.brownian(self.r, self.interval(), self.sigma, z),
             1)
+        # S_T = self.S * self.brownian(self.r, self.interval(), self.sigma, z)
         return S_T, z
 
     def payoff(self, S_T):
@@ -254,7 +254,7 @@ class GeometricBasketWithTwoAssets(BlackScholes):
 
 class ArithmeticBasketWithTwoAssets(MonteCarlo):
 
-    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r, M:int=1000, type_="arithmetic"):
+    def __init__(self, p:str, S1, S2, K, T, sigma1, sigma2, corr, r, M:int=10000, type_="arithmetic"):
         self.p = p
         self.S1 = S1
         self.S2 = S2
@@ -275,8 +275,8 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
     
     def generate_path(self, simulations, seed=100):
         np.random.seed(seed)
-        z1 = np.random.randn(simulations)
-        z  = np.random.randn(simulations)
+        z1 = np.random.standard_normal(simulations)
+        z  = np.random.standard_normal(simulations)
         z2 = self.corr*z1 + np.sqrt(1-self.corr**2)*z
 
         S1_T = self.S1 * self.brownian(self.r, self.T, self.sigma1, z1)
@@ -305,7 +305,7 @@ class ArithmeticBasketWithTwoAssets(MonteCarlo):
             option_payoff = self.df() * np.maximum(self.K - S_T, 0)
         return option_payoff
     
-    def price(self, simulations:int=1000, control_variate=None):
+    def price(self, simulations:int=1000, control_variate=True):
         simulations = simulations or self.M
         if control_variate:
             return self.price_with_control_variate(simulations)
